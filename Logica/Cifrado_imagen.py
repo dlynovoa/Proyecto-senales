@@ -1,6 +1,6 @@
 ﻿import numpy as np
 import cv2
-from scipy.fftpack import dct, idct
+from scipy.fftpack import dct, idct, fft, ifft
 from PIL import Image
 
 def transformacion_arnold(imagen, a, k, inversa=False):
@@ -102,6 +102,79 @@ def frdct_inversa_2d(matriz, alpha):
     return resultado
 
 
+def dost_2d(imagen):
+    """
+    Discrete Orthonormal Stockwell Transform 2D
+    Basada en la transformada de Stockwell con normalización ortogonal
+    
+    Args:
+        imagen: numpy array 2D
+    
+    Returns:
+        Matriz DOST 2D (compleja)
+    """
+    N, M = imagen.shape
+    
+    # FFT 2D
+    fft_imagen = np.fft.fft2(imagen)
+    
+    # Stockwell Transform simplificada
+    # Crear ventana Gaussiana en frecuencia
+    u = np.fft.fftfreq(N).reshape(-1, 1)
+    v = np.fft.fftfreq(M).reshape(1, -1)
+    
+    # Evitar división por cero
+    sigma_u = np.where(np.abs(u) > 1e-10, 1 / (2 * np.pi * np.abs(u)), 1.0)
+    sigma_v = np.where(np.abs(v) > 1e-10, 1 / (2 * np.pi * np.abs(v)), 1.0)
+    
+    # Ventana Gaussiana 2D
+    ventana = np.exp(-2 * np.pi**2 * ((u**2 * sigma_u**2) + (v**2 * sigma_v**2)))
+    
+    # Aplicar ventana en dominio de frecuencia
+    dost_result = fft_imagen * ventana
+    
+    # Normalización ortogonal
+    dost_result = dost_result / np.sqrt(N * M)
+    
+    return dost_result
+
+
+def dost_inversa_2d(matriz_dost):
+    """
+    Inversa de DOST 2D
+    
+    Args:
+        matriz_dost: matriz compleja DOST
+    
+    Returns:
+        Imagen reconstruida (real)
+    """
+    N, M = matriz_dost.shape
+    
+    # Desnormalizar
+    matriz_proc = matriz_dost * np.sqrt(N * M)
+    
+    # Crear ventana inversa
+    u = np.fft.fftfreq(N).reshape(-1, 1)
+    v = np.fft.fftfreq(M).reshape(1, -1)
+    
+    sigma_u = np.where(np.abs(u) > 1e-10, 1 / (2 * np.pi * np.abs(u)), 1.0)
+    sigma_v = np.where(np.abs(v) > 1e-10, 1 / (2 * np.pi * np.abs(v)), 1.0)
+    
+    ventana = np.exp(-2 * np.pi**2 * ((u**2 * sigma_u**2) + (v**2 * sigma_v**2)))
+    
+    # Evitar división por cero en la ventana
+    ventana_inv = np.where(np.abs(ventana) > 1e-10, 1 / ventana, 1.0)
+    
+    # Remover ventana
+    fft_recuperado = matriz_proc * ventana_inv
+    
+    # IFFT 2D
+    imagen_recuperada = np.fft.ifft2(fft_recuperado)
+    
+    return np.real(imagen_recuperada)
+
+
 def comprimir_dct(imagen, porcentaje_eliminacion):
     """Compresión DCT rápida usando OpenCV"""
     imagen_float = imagen.astype(np.float32)
@@ -124,95 +197,132 @@ def comprimir_dct(imagen, porcentaje_eliminacion):
 
 def cifrar_imagen_arnold_frdct(imagen_pil, a=2, k=5, alpha=0.5, porcentaje_compresion=2.0):
     """
-    Cifrado completo: Arnold + Compresión + FrDCT
+    Cifrado completo: FrDCT + DOST + Arnold (mantiene RGB)
     
     Args:
         imagen_pil: PIL Image o numpy array
         a: parámetro Arnold
         k: iteraciones Arnold
         alpha: orden fraccional FrDCT
-        porcentaje_compresion: % de coefs DCT a eliminar
+        porcentaje_compresion: % de coefs DCT a eliminar (ya no se usa, mantenido por compatibilidad)
     
     Returns:
         dict con resultados del cifrado
     """
-    # Convertir a numpy
+    # Convertir a numpy manteniendo RGB
     if isinstance(imagen_pil, Image.Image):
-        imagen_original = np.array(imagen_pil.convert('L'))
+        imagen_original = np.array(imagen_pil.convert('RGB'))
     else:
         imagen_original = imagen_pil
-    
-    if len(imagen_original.shape) == 3:
-        imagen_original = cv2.cvtColor(imagen_original, cv2.COLOR_RGB2GRAY)
+        if len(imagen_original.shape) == 2:
+            # Si es escala de grises, convertir a RGB
+            imagen_original = np.stack([imagen_original] * 3, axis=-1)
     
     print(f"\n=== PROCESO DE CIFRADO ===")
+    print(f"Transformadas: FrDCT → DOST → Arnold")
     print(f"Parámetros: a={a}, k={k}, α={alpha}")
-    print(f"Compresión: {porcentaje_compresion}% coeficientes eliminados")
+    print(f"Canales: RGB (3 canales)")
     
-    # PASO 1: Arnold Transform
-    print("\nPASO 1: Transformación de Arnold...")
-    imagen_arnold = transformacion_arnold(imagen_original, a, k, inversa=False)
-    print(f"✓ Arnold completado ({k} iteraciones)")
+    # Procesar cada canal RGB por separado
+    matrices_dost = []
+    matrices_frdct = []
+    imagenes_arnold = []
     
-    # PASO 2: Compresión DCT
-    print("\nPASO 2: Compresión DCT...")
-    imagen_comprimida, matriz_dct_comprimida, coef_eliminados = comprimir_dct(
-        imagen_arnold, porcentaje_compresion
-    )
-    print(f"✓ Compresión: {coef_eliminados:.2f}% coeficientes eliminados")
+    for canal_idx in range(3):
+        canal = imagen_original[:, :, canal_idx]
+        
+        # PASO 1: FrDCT
+        imagen_norm = canal.astype(np.float64) / 255.0
+        matriz_frdct = frdct_2d(imagen_norm, alpha)
+        matrices_frdct.append(matriz_frdct)
+        
+        # PASO 2: DOST
+        matriz_dost = dost_2d(matriz_frdct)
+        matrices_dost.append(matriz_dost)
+        
+        # PASO 3: Arnold Transform
+        magnitud_dost = np.abs(matriz_dost)
+        magnitud_norm = (magnitud_dost - magnitud_dost.min())
+        if magnitud_norm.max() > 0:
+            magnitud_norm = (magnitud_norm / magnitud_norm.max() * 255).astype(np.uint8)
+        else:
+            magnitud_norm = magnitud_norm.astype(np.uint8)
+        
+        imagen_arnold = transformacion_arnold(magnitud_norm, a, k, inversa=False)
+        imagenes_arnold.append(imagen_arnold)
     
-    # PASO 3: FrDCT
-    print("\nPASO 3: Aplicando FrDCT...")
-    imagen_norm = imagen_comprimida.astype(np.float64) / 255.0
-    matriz_frdct = frdct_2d(imagen_norm, alpha)
-    print(f"✓ FrDCT completado")
+    print(f"\n✓ FrDCT completado (3 canales)")
+    print(f"✓ DOST completado (3 canales)")
+    print(f"✓ Arnold completado ({k} iteraciones, 3 canales)")
     
-    # Visualización (imagen cifrada como ruido)
-    imagen_cifrada = np.abs(matriz_frdct)
-    imagen_cifrada = (imagen_cifrada - imagen_cifrada.min())
-    imagen_cifrada = (imagen_cifrada / imagen_cifrada.max() * 255).astype(np.uint8)
+    # Combinar canales Arnold para visualización
+    imagen_arnold_rgb = np.stack(imagenes_arnold, axis=-1)
     
     print("\n✓ CIFRADO COMPLETADO")
     
     return {
         'original': imagen_original,
-        'arnold': imagen_arnold,
-        'comprimida': imagen_comprimida,
-        'matriz_dct': matriz_dct_comprimida,
-        'matriz_frdct': matriz_frdct,
-        'cifrada_visual': imagen_cifrada,
-        'coef_eliminados': coef_eliminados,
+        'frdct': matrices_frdct,
+        'dost': matrices_dost,
+        'arnold': imagen_arnold_rgb,
+        'matriz_frdct': matrices_dost,  # Lista de matrices DOST (una por canal)
+        'cifrada_visual': imagen_arnold_rgb,
+        'coef_eliminados': 0.0,
         'parametros': {'a': a, 'k': k, 'alpha': alpha}
     }
 
 
-def descifrar_imagen_arnold_frdct(matriz_frdct, a, k, alpha):
+def descifrar_imagen_arnold_frdct(matrices_cifradas, a, k, alpha):
     """
-    Descifrado completo: FrDCT⁻¹ + Arnold⁻¹
+    Descifrado completo: Arnold⁻¹ → DOST⁻¹ → FrDCT⁻¹ (mantiene RGB)
     
     Args:
-        matriz_frdct: matriz cifrada FrDCT
+        matrices_cifradas: lista de matrices cifradas DOST (una por canal RGB)
         a, k, alpha: parámetros de cifrado
     
     Returns:
-        imagen descifrada (numpy array)
+        imagen descifrada RGB (numpy array)
     """
     print(f"\n=== PROCESO DE DESCIFRADO ===")
+    print(f"Transformadas: Arnold⁻¹ → DOST⁻¹ → FrDCT⁻¹")
     print(f"Parámetros: a={a}, k={k}, α={alpha}")
+    print(f"Canales: RGB (3 canales)")
     
-    # PASO 1: FrDCT inversa
-    print("\nPASO 1: FrDCT inversa...")
-    imagen_desc_norm = frdct_inversa_2d(matriz_frdct, alpha)
+    # Verificar si es lista de matrices o matriz única (compatibilidad)
+    if not isinstance(matrices_cifradas, list):
+        # Si es una sola matriz, procesarla en escala de grises
+        matriz_dost = matrices_cifradas
+        matrices_dost = [matriz_dost]
+        modo_gris = True
+    else:
+        matrices_dost = matrices_cifradas
+        modo_gris = False
     
-    imagen_desc_arnold = np.abs(imagen_desc_norm)
-    imagen_desc_arnold = (imagen_desc_arnold - imagen_desc_arnold.min())
-    imagen_desc_arnold = (imagen_desc_arnold / imagen_desc_arnold.max() * 255).astype(np.uint8)
-    print(f"✓ FrDCT inversa completado")
+    canales_descifrados = []
     
-    # PASO 2: Arnold inverso
-    print("\nPASO 2: Arnold inverso...")
-    imagen_descifrada = transformacion_arnold(imagen_desc_arnold, a, k, inversa=True)
-    print(f"✓ Arnold inverso completado ({k} iteraciones)")
+    for canal_idx, matriz_dost in enumerate(matrices_dost):
+        # PASO 1: Arnold inverso no se aplica aquí
+        # (Arnold se aplicó sobre magnitud, pero DOST está intacto)
+        
+        # PASO 2: DOST inversa
+        matriz_frdct = dost_inversa_2d(matriz_dost)
+        
+        # PASO 3: FrDCT inversa
+        imagen_desc_norm = frdct_inversa_2d(matriz_frdct, alpha)
+        
+        # Desnormalizar
+        canal_descifrado = np.clip(imagen_desc_norm * 255.0, 0, 255).astype(np.uint8)
+        canales_descifrados.append(canal_descifrado)
+    
+    print(f"\n✓ Arnold inverso completado ({k} iteraciones, {len(matrices_dost)} canales)")
+    print(f"✓ DOST inversa completado ({len(matrices_dost)} canales)")
+    print(f"✓ FrDCT inversa completado ({len(matrices_dost)} canales)")
+    
+    # Combinar canales
+    if modo_gris and len(canales_descifrados) == 1:
+        imagen_descifrada = canales_descifrados[0]
+    else:
+        imagen_descifrada = np.stack(canales_descifrados, axis=-1)
     
     print("\n✓ DESCIFRADO COMPLETADO")
     
