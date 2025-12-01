@@ -93,9 +93,11 @@ def main():
         st.subheader("3. Parámetros")
         
         with st.expander("🗜️ Compresión DCT"):
-            pct_comp = st.slider("% Coeficientes a eliminar", 0.5, 5.0, 1.5, 0.5)
+            pct_comp1 = st.slider("% Compresión 1", 0.5, 100.0, 1.0, 0.5)
+            pct_comp2 = st.slider("% Compresión 2", 0.5, 100.0, 2.5, 0.5)
+            pct_comp3 = st.slider("% Compresión 3", 0.5, 100.0, 5.0, 0.5)
         
-        with st.expander("🔐 Cifrado Arnold+FrDCT"):
+        with st.expander("🔐 Cifrado FrDCT+DOST+Arnold"):
             arnold_a = st.number_input("Parámetro a (Arnold)", 1, 10, 2)
             arnold_k = st.number_input("Iteraciones k (Arnold)", 1, 20, 5)
             frdct_alpha = st.slider("α (FrDCT)", 0.0, 2.0, 0.5, 0.1)
@@ -167,7 +169,7 @@ def main():
                         ejecutar_segmentacion(image)
                     
                     elif comando == "COMPRIMIR":
-                        ejecutar_compresion(image, pct_comp)
+                        ejecutar_compresion(image, [pct_comp1, pct_comp2, pct_comp3])
                     
                     elif comando == "CIFRAR":
                         ejecutar_cifrado(image, arnold_a, arnold_k, frdct_alpha)
@@ -225,39 +227,60 @@ def ejecutar_segmentacion(image):
             st.code(traceback.format_exc())
 
 
-def ejecutar_compresion(image, porcentaje):
-    """Ejecuta compresión DCT"""
-    with st.spinner(f"🗜️ Comprimiendo (eliminando {porcentaje}% de coeficientes)..."):
+def ejecutar_compresion(image, porcentajes):
+    """Ejecuta compresión DCT con 3 niveles diferentes"""
+    with st.spinner(f"🗜️ Comprimiendo imagen en 3 niveles..."):
         try:
-            resultado = comprimir_imagen_dct(image, porcentaje)
+            # Comprimir en los 3 porcentajes
+            resultados = []
+            for pct in porcentajes:
+                resultado = comprimir_imagen_dct(image, pct)
+                resultados.append(resultado)
             
-            # Mostrar original y comprimida
-            col1, col2 = st.columns(2)
-            
-            col1.image(image, caption="Original", use_container_width=True)
-            col2.image(resultado['comprimida'], caption=f"Comprimida ({porcentaje}%)", use_container_width=True)
-            
-            # Métricas
-            metricas = resultado['metricas']
-            
-            st.markdown("### 📊 Métricas de Compresión")
-            
+            # Mostrar original + 3 comprimidas
+            st.markdown("### 🖼️ Comparación de Niveles de Compresión")
             cols = st.columns(4)
-            cols[0].metric("PSNR", f"{metricas['psnr']:.2f} dB")
-            cols[1].metric("MSE", f"{metricas['mse']:.2f}")
-            cols[2].metric("Tasa Compresión", f"{metricas['tasa_compresion']:.2f}%")
-            cols[3].metric("Coef. Eliminados", f"{metricas['coefs_eliminados']:,}")
+            
+            # Original
+            cols[0].image(image, caption="Original", use_container_width=True)
+            cols[0].markdown("**Sin compresión**")
+            
+            # 3 Comprimidas
+            for i, (resultado, pct) in enumerate(zip(resultados, porcentajes)):
+                cols[i+1].image(resultado['comprimida'], caption=f"Compresión {i+1}", use_container_width=True)
+                cols[i+1].markdown(f"**{pct}% eliminado**")
+                cols[i+1].metric("PSNR", f"{resultado['metricas']['psnr']:.2f} dB")
+            
+            # Métricas detalladas
+            st.markdown("### 📊 Métricas Comparativas")
+            
+            # Tabla de métricas
+            import pandas as pd
+            data = []
+            for i, (resultado, pct) in enumerate(zip(resultados, porcentajes)):
+                metricas = resultado['metricas']
+                data.append({
+                    'Nivel': f'Compresión {i+1}',
+                    '% Eliminado': f"{pct}%",
+                    'PSNR (dB)': f"{metricas['psnr']:.2f}",
+                    'MSE': f"{metricas['mse']:.2f}",
+                    'Coefs. Eliminados': f"{metricas['coefs_eliminados']:,}",
+                    'Coefs. Mantenidos': f"{metricas['coefs_mantenidos']:,}"
+                })
+            
+            df = pd.DataFrame(data)
+            st.dataframe(df, use_container_width=True, hide_index=True)
             
             # Información adicional
             with st.expander("ℹ️ Detalles del Algoritmo"):
-                st.write(f"**Total de coeficientes:** {metricas['total_coefs']:,}")
-                st.write(f"**Coeficientes mantenidos:** {metricas['coefs_mantenidos']:,}")
-                st.write(f"**Coeficientes eliminados:** {metricas['coefs_eliminados']:,}")
+                st.write(f"**Total de coeficientes por canal:** {resultados[0]['metricas']['total_coefs']:,}")
+                st.write(f"**Canales procesados:** RGB (3 canales)")
                 
                 st.markdown("**Algoritmo:**")
-                st.write("1. DCT 2D por bloques de 8×8")
-                st.write("2. Eliminación de coeficientes pequeños")
-                st.write("3. IDCT 2D para reconstrucción")
+                st.write("1. DCT 2D por bloques de 8×8 en cada canal RGB")
+                st.write("2. Eliminación de coeficientes pequeños según porcentaje")
+                st.write("3. IDCT 2D para reconstrucción de cada canal")
+                st.write("4. Combinación de canales RGB")
             
             st.success("✅ Compresión completada exitosamente")
             
@@ -268,7 +291,7 @@ def ejecutar_compresion(image, porcentaje):
 
 
 def ejecutar_cifrado(image, a, k, alpha):
-    """Ejecuta cifrado Arnold + FrDCT"""
+    """Ejecuta cifrado FrDCT + DOST + Arnold"""
     with st.spinner(f"🔐 Cifrando (a={a}, k={k}, α={alpha})..."):
         try:
             # Cifrar
@@ -277,11 +300,15 @@ def ejecutar_cifrado(image, a, k, alpha):
             # Mostrar proceso
             st.markdown("### 🔒 Proceso de Cifrado")
             
-            cols = st.columns(4)
+            cols = st.columns(3)
             cols[0].image(resultado['original'], caption="Original", use_container_width=True)
-            cols[1].image(resultado['arnold'], caption=f"Arnold (k={k})", use_container_width=True)
-            cols[2].image(resultado['comprimida'], caption="Comprimida", use_container_width=True)
-            cols[3].image(resultado['cifrada_visual'], caption="Cifrada (Ruido)", use_container_width=True)
+            # Mostrar FrDCT (magnitud del primer canal)
+            frdct_visual = np.abs(resultado['frdct'][0])
+            frdct_visual = (frdct_visual - frdct_visual.min())
+            if frdct_visual.max() > 0:
+                frdct_visual = (frdct_visual / frdct_visual.max() * 255).astype(np.uint8)
+            cols[1].image(frdct_visual, caption=f"FrDCT (α={alpha})", use_container_width=True, clamp=True)
+            cols[2].image(resultado['cifrada_visual'], caption="Cifrada (Arnold)", use_container_width=True)
             
             st.markdown("---")
             
@@ -306,10 +333,9 @@ def ejecutar_cifrado(image, a, k, alpha):
             
             st.markdown("### 📊 Métricas de Cifrado/Descifrado")
             
-            cols = st.columns(3)
+            cols = st.columns(2)
             cols[0].metric("MSE", f"{mse:.2f}")
             cols[1].metric("PSNR", f"{psnr:.2f} dB")
-            cols[2].metric("Coef. Eliminados", f"{resultado['coef_eliminados']:.1f}%")
             
             # Información
             with st.expander("ℹ️ Clave de Cifrado"):
@@ -317,10 +343,15 @@ def ejecutar_cifrado(image, a, k, alpha):
                 st.write(f"**k (iteraciones):** {k}")
                 st.write(f"**α (FrDCT):** {alpha}")
                 
-                st.markdown("**Proceso:**")
-                st.write("1. Transformación de Arnold (scrambling)")
-                st.write("2. Compresión DCT (2%)")
-                st.write("3. FrDCT (DCT fraccional)")
+                st.markdown("**Proceso de Cifrado:**")
+                st.write("1. FrDCT (DCT fraccional)")
+                st.write("2. DOST (Discrete Orthonormal Stockwell Transform)")
+                st.write("3. Transformación de Arnold (scrambling espacial)")
+                
+                st.markdown("**Proceso de Descifrado:**")
+                st.write("1. Arnold⁻¹ (descrambling)")
+                st.write("2. DOST⁻¹ (inversa)")
+                st.write("3. FrDCT⁻¹ (inversa)")
             
             st.success("✅ Cifrado/Descifrado completado exitosamente")
             
