@@ -40,13 +40,13 @@ st.markdown("""
 
 def main():
     # --- ENCABEZADO ---
-    st.title("🎙️ Sistema de Procesamiento de Imágenes por Voz")
+    st.title("Sistema de Procesamiento de Imágenes por Voz")
     st.caption("Proyecto Final - Procesamiento Digital de Señales")
     st.markdown("---")
 
     # --- BARRA LATERAL ---
     with st.sidebar:
-        st.header("⚙️ Configuración")
+        st.header("Configuración")
         
         # 1. Cargar Imagen
         st.subheader("1. Imagen Base")
@@ -80,12 +80,12 @@ def main():
             with st.spinner("🔄 Inicializando motor de voz..."):
                 try:
                     st.session_state.engine = VoiceEngine()
-                    st.success("✅ Motor Listo")
+                    st.success(" Motor Listo")
                 except Exception as e:
                     st.error(f"❌ Error: {e}")
                     st.stop()
         else:
-            st.success("✅ Motor Activo")
+            st.success("Motor Activo")
         
         st.markdown("---")
         
@@ -185,8 +185,7 @@ def main():
 
 
 def ejecutar_segmentacion(image):
-    """Ejecuta segmentación con IA (rembg)"""
-    with st.spinner(f"🔍 Segmentando con IA (removiendo fondo)..."):
+    with st.spinner(f"🔍 Segmentando (removiendo fondo)..."):
         try:
             resultado = segmentar_con_ia(image)
             
@@ -194,13 +193,13 @@ def ejecutar_segmentacion(image):
             col1, col2, col3 = st.columns(3)
             
             col1.image(resultado['original'], caption="Original", use_container_width=True)
-            col2.image(resultado['mascara'], caption="Máscara (IA)", use_container_width=True)
+            col2.image(resultado['mascara'], caption="Máscara", use_container_width=True)
             col3.image(resultado['segmentada'], caption="Objeto Recortado", use_container_width=True)
             
             # Generar visualización completa
             img_viz = generar_visualizacion_ia(resultado)
             
-            st.markdown("### 📊 Resultado de Segmentación IA")
+            st.markdown("### 📊 Resultado de Segmentación ")
             st.image(img_viz, use_container_width=True)
             
             # Información
